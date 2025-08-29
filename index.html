@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VTT to RTF Converter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: white;
+            color: black;
+        }
+
+        .container {
+            background: white;
+            padding: 20px;
+            border: 1px solid #ccc;
+        }
+
+        h1 {
+            color: black;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .upload-section,
+        .speakers-section,
+        .output-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+            background: #f0f0f0;
+            color: black;
+            padding: 8px 16px;
+            border: 1px solid #ccc;
+        }
+
+        .file-input-wrapper input[type=file] {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .speakers-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .speaker-item {
+            background: white;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+
+        .speaker-item label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .speaker-item input {
+            width: 100%;
+            padding: 5px;
+            border: 1px solid #ccc;
+        }
+
+        .process-btn,
+        .copy-btn,
+        .download-btn {
+            background: #f0f0f0;
+            color: black;
+            border: 1px solid #ccc;
+            padding: 8px 16px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+
+        .output-text {
+            background: white;
+            border: 1px solid #ccc;
+            padding: 15px;
+            min-height: 300px;
+            white-space: pre-wrap;
+            font-family: Times, serif;
+            line-height: 1.4;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .section-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .instructions {
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .status {
+            padding: 8px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+        }
+
+        .status.success {
+            background: #f0f8f0;
+        }
+
+        .status.info {
+            background: #f0f0f8;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>VTT to RTF Converter</h1>
+
+        <!-- <div class="instructions">
+            <strong>Instructions:</strong>
+            <ol>
+                <li>Upload your VTT file</li>
+                <li>Review and optionally rename speakers</li>
+                <li>Click "Process VTT" to generate clean transcript</li>
+                <li>Either download as RTF (opens in Word) or copy the text and paste into Microsoft Word</li>
+            </ol>
+        </div> -->
+
+        <div class="upload-section">
+            <div class="section-title">Upload VTT File</div>
+            <div class="file-input-wrapper">
+                <input type="file" id="vttFile" accept=".vtt" />
+                Select File
+            </div>
+            <div id="fileStatus"></div>
+        </div>
+
+        <div class="speakers-section hidden" id="speakersSection">
+            <div class="section-title">Deidentify Data</div>
+            <p>The following speakers were found in your VTT file. Change the participant's name to "participant"
+                followed by their ID number, e.g., "participant 5".</p>
+            <div class="speakers-list" id="speakersList"></div>
+        </div>
+
+        <div class="output-section hidden" id="outputSection">
+            <div class="section-title">Process & Download</div>
+            <p>1. After you've deidentified the participant above, click "Process VTT". <br />2. Skim the output to make sure the
+                name was changed successfully, and then click "Download RTF" to download a clean file. <br />3. Rename the file
+                "pXinterviewY" (e.g, "p5interview1") and upload it into Dedoose. <br /> <em>Note: If you cannot download the RTF for some
+                reason, create a word doc and use the "Copy to Clipboard" button to copy/paste the clean transcript into
+                the word doc.</em></p>
+            <button class="process-btn" id="processBtn">Process VTT</button>
+            <button class="download-btn" id="downloadBtn">Download RTF</button>
+            <button class="copy-btn" id="copyBtn">Copy to Clipboard</button>
+            <div class="output-text" id="outputText" placeholder="Processed transcript will appear here..."></div>
+        </div>
+    </div>
+
+    <script>
+        let vttContent = '';
+        let speakers = new Set();
+        let speakerMappings = {};
+
+        document.getElementById('vttFile').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                vttContent = e.target.result;
+                parseVTT();
+            };
+            reader.readAsText(file);
+        });
+
+        function parseVTT() {
+            const lines = vttContent.split('\n');
+            speakers.clear();
+
+            let speakerCount = 0;
+
+            for (let line of lines) {
+                line = line.trim();
+
+                // Skip empty lines, WEBVTT header, sequence numbers, and timestamps
+                if (!line ||
+                    line === 'WEBVTT' ||
+                    /^\d+$/.test(line) ||
+                    line.includes(' --> ')) {
+                    continue;
+                }
+
+                // Check if this line contains speaker dialogue
+                const speakerMatch = line.match(/^([^:]+):\s*/);
+                if (speakerMatch) {
+                    const speaker = speakerMatch[1].trim();
+                    speakers.add(speaker);
+                    speakerCount++;
+                }
+            }
+
+            if (speakers.size > 0) {
+                displaySpeakers();
+                showStatus('fileStatus', `File loaded successfully! Found ${speakers.size} unique speakers in ${speakerCount} dialogue lines.`, 'success');
+            } else {
+                showStatus('fileStatus', 'No speakers found in the VTT file. Please check the file format.', 'info');
+            }
+        }
+
+        function displaySpeakers() {
+            const speakersList = document.getElementById('speakersList');
+            const speakersSection = document.getElementById('speakersSection');
+            const outputSection = document.getElementById('outputSection');
+
+            speakersList.innerHTML = '';
+            speakerMappings = {};
+
+            speakers.forEach(speaker => {
+                const speakerDiv = document.createElement('div');
+                speakerDiv.className = 'speaker-item';
+
+                speakerDiv.innerHTML = `
+                    <label>Original: "${speaker}"</label>
+                    <input type="text" value="${speaker}" data-original="${speaker}" placeholder="Enter new name or leave unchanged">
+                `;
+
+                speakersList.appendChild(speakerDiv);
+                speakerMappings[speaker] = speaker; // Default to same name
+            });
+
+            // Add event listeners for input changes
+            speakersList.querySelectorAll('input').forEach(input => {
+                input.addEventListener('input', function () {
+                    const original = this.getAttribute('data-original');
+                    speakerMappings[original] = this.value.trim() || original;
+                });
+            });
+
+            speakersSection.classList.remove('hidden');
+            outputSection.classList.remove('hidden');
+        }
+
+        document.getElementById('processBtn').addEventListener('click', function () {
+            processVTT();
+        });
+
+        function processVTT() {
+            if (!vttContent) {
+                alert('Please upload a VTT file first.');
+                return;
+            }
+
+            const lines = vttContent.split('\n');
+            const dialogueLines = [];
+
+            // First pass: extract all dialogue lines
+            for (let line of lines) {
+                line = line.trim();
+
+                // Skip empty lines, WEBVTT header, sequence numbers, and timestamps
+                if (!line ||
+                    line === 'WEBVTT' ||
+                    /^\d+$/.test(line) ||
+                    /^\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}$/.test(line)) {
+                    continue;
+                }
+
+                // Check if this line contains speaker dialogue
+                const speakerMatch = line.match(/^([^:]+):\s*(.*)$/);
+                if (speakerMatch) {
+                    let speaker = speakerMatch[1].trim();
+                    const dialogue = speakerMatch[2].trim();
+
+                    // Apply speaker name mapping
+                    if (speakerMappings[speaker]) {
+                        speaker = speakerMappings[speaker];
+                    }
+
+                    dialogueLines.push({ speaker, dialogue });
+                }
+            }
+
+            // Second pass: merge consecutive lines from the same speaker
+            const mergedLines = [];
+            let currentSpeaker = null;
+            let currentText = '';
+
+            for (let { speaker, dialogue } of dialogueLines) {
+                if (speaker === currentSpeaker) {
+                    // Same speaker - append dialogue with a space
+                    currentText += ' ' + dialogue;
+                } else {
+                    // Different speaker - save previous line and start new one
+                    if (currentSpeaker !== null) {
+                        mergedLines.push(`${currentSpeaker}: ${currentText}`);
+                    }
+                    currentSpeaker = speaker;
+                    currentText = dialogue;
+                }
+            }
+
+            // Don't forget the last line
+            if (currentSpeaker !== null) {
+                mergedLines.push(`${currentSpeaker}: ${currentText}`);
+            }
+
+            const output = mergedLines.join('\n\n');
+            document.getElementById('outputText').textContent = output;
+
+            showStatus('outputSection', 'VTT processed successfully! You can now copy the text below.', 'success');
+        }
+
+        document.getElementById('copyBtn').addEventListener('click', function () {
+            const outputText = document.getElementById('outputText');
+            const text = outputText.textContent;
+
+            if (!text.trim()) {
+                alert('Please process the VTT file first.');
+                return;
+            }
+
+            navigator.clipboard.writeText(text).then(function () {
+                showStatus('outputSection', 'Text copied to clipboard! You can now paste it into Microsoft Word.', 'success');
+            }).catch(function () {
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+
+                showStatus('outputSection', 'Text copied to clipboard! You can now paste it into Microsoft Word.', 'success');
+            });
+        });
+
+        document.getElementById('downloadBtn').addEventListener('click', function () {
+            const outputText = document.getElementById('outputText');
+            const text = outputText.textContent;
+
+            if (!text.trim()) {
+                alert('Please process the VTT file first.');
+                return;
+            }
+
+            generateRtf(text);
+        });
+
+        function cleanTextForRtf(text) {
+            // Replace problematic Unicode characters with simpler equivalents
+            return text
+                .replace(/…/g, '...')  // Ellipsis
+                .replace(/"/g, '"')    // Left double quote
+                .replace(/"/g, '"')    // Right double quote
+                .replace(/'/g, "'")    // Left single quote
+                .replace(/'/g, "'")    // Right single quote
+                .replace(/—/g, '--')   // Em dash
+                .replace(/–/g, '-')    // En dash
+                .replace(/•/g, '*')    // Bullet point
+                .replace(/©/g, '(c)')  // Copyright
+                .replace(/®/g, '(R)')  // Registered trademark
+                .replace(/™/g, '(TM)') // Trademark
+                .replace(/[\u0080-\uFFFF]/g, function (match) {
+                    // Replace any remaining non-ASCII characters with question mark
+                    return '?';
+                });
+        }
+
+        function generateRtf(text) {
+            try {
+                console.log('Generating RTF file');
+
+                // Clean the text first
+                const cleanText = cleanTextForRtf(text);
+
+                // Split text into paragraphs
+                const paragraphs = cleanText.split('\n\n').filter(p => p.trim());
+
+                // Create RTF content with proper header
+                let rtfContent = '{\\rtf1\\ansi\\ansicpg1252\\deff0 {\\fonttbl {\\f0\\fnil\\fcharset0 Times New Roman;}}\\viewkind4\\uc1\\pard\\lang1033\\f0\\fs24 ';
+
+                paragraphs.forEach(paragraphText => {
+                    const mainText = paragraphText.split('\n').join(' ').trim();
+
+                    // Check if it's a speaker line
+                    const speakerMatch = mainText.match(/^([^:]+):\s*(.*)$/);
+
+                    if (speakerMatch) {
+                        const speaker = speakerMatch[1];
+                        const dialogue = speakerMatch[2];
+
+                        // RTF format: bold speaker name, escape special RTF characters
+                        const escapedSpeaker = speaker.replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+                        const escapedDialogue = dialogue.replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+
+                        rtfContent += `{\\b ${escapedSpeaker}:} ${escapedDialogue}\\par\\par `;
+                    } else {
+                        const escapedText = mainText.replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+                        rtfContent += `${escapedText}\\par\\par `;
+                    }
+                });
+
+                rtfContent += '}';
+
+                // Create and download RTF file
+                const blob = new Blob([rtfContent], { type: 'application/rtf' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'transcript.rtf';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                showStatus('outputSection', 'RTF file downloaded successfully! (Opens in Microsoft Word)', 'success');
+
+            } catch (rtfError) {
+                console.error('RTF generation failed:', rtfError);
+                showStatus('outputSection', `File generation failed: ${rtfError.message}. Please use the Copy button.`, 'info');
+            }
+        }
+
+        function escapeRegex(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function showStatus(containerId, message, type) {
+            const container = document.getElementById(containerId);
+            let statusDiv = container.querySelector('.status');
+
+            if (!statusDiv) {
+                statusDiv = document.createElement('div');
+                statusDiv.className = 'status';
+                container.appendChild(statusDiv);
+            }
+
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+
+            // Auto-hide success messages after 5 seconds
+            if (type === 'success') {
+                setTimeout(() => {
+                    if (statusDiv.classList.contains('success')) {
+                        statusDiv.remove();
+                    }
+                }, 5000);
+            }
+        }
+    </script>
+</body>
+
+</html>
